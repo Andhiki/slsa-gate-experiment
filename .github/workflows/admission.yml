@@ -18,6 +18,19 @@ on:
         description: Include exploratory direct-HTTP and controller resource measurements
         type: boolean
         default: false
+      faults:
+        description: Include cold-controller GHCR unavailability and recovery pilot
+        type: boolean
+        default: false
+      other_run:
+        description: Optional signed other-workflow fixture
+        default: ''
+      substitution_run:
+        description: Optional artifact substitution fixture (after invalid evidence attached)
+        default: ''
+      tampered_run:
+        description: Optional tampered statement fixture (after invalid evidence attached)
+        default: ''
 permissions:
   contents: read
   packages: read
@@ -53,6 +66,10 @@ jobs:
           ALT_RUN: ${{ inputs.alternate_run }}
           UNSIGNED_RUN: ${{ inputs.unsigned_run }}
           PERFORMANCE: ${{ inputs.performance }}
+          FAULTS: ${{ inputs.faults }}
+          OTHER_RUN: ${{ inputs.other_run }}
+          SUBSTITUTION_RUN: ${{ inputs.substitution_run }}
+          TAMPERED_RUN: ${{ inputs.tampered_run }}
         run: python3 hosted_trial.py
       - name: Collect cluster diagnostics
         if: always()

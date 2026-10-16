@@ -48,14 +48,17 @@ def trial(mode, policy_path=None):
 cases = [fixture(os.environ['MAIN_RUN'], 'legitimate-main', 'authorized', 'main'),
          fixture(os.environ['ALT_RUN'], 'authentic-disallowed-ref', 'unauthorized', 'experiment-disallowed-ref'),
          fixture(os.environ['UNSIGNED_RUN'], 'unsigned', 'unauthorized', 'main')]
-assert len({c['image'] for c in cases}) == 3
+for env, name in [('OTHER_RUN', 'other-workflow'), ('SUBSTITUTION_RUN', 'artifact-substitution'), ('TAMPERED_RUN', 'tampered-statement')]:
+    if os.environ.get(env):
+        cases.append(fixture(os.environ[env], name, 'unauthorized', 'main'))
+assert len({c['image'] for c in cases}) == len(cases)
 (OUT / 'cases.json').write_text(json.dumps(cases, indent=2))
 
 # Independent CLI verification against the registry, preserving full public evidence.
 for case in cases:
     command(['gh', 'attestation', 'verify', 'oci://' + case['image'], '-R', REPO,
              '--bundle-from-oci', '--format', 'json'], case['id'] + '-crypto.json', check=False)
-    if case['id'] != 'unsigned':
+    if case['id'] in ('legitimate-main', 'authentic-disallowed-ref', 'other-workflow'):
         command(['gh', 'attestation', 'verify', 'oci://' + case['image'], '-R', REPO,
                  '--bundle-from-oci', '--source-ref', 'refs/heads/main', '--format', 'json'],
                 case['id'] + '-main-ref.json', check=False)
@@ -86,6 +89,21 @@ for mode, policy in policies(REPO).items():
     trial(mode, path)
     measure(mode)
 
+if os.environ.get('FAULTS') == 'true':
+    # Synthetic registry outage on a freshly restarted controller; this clears warm state.
+    # It is not a warm-cache outage or a claim about arbitrary real network outages.
+    deployment = 'kyverno-admission-controller'
+    patch = {'spec': {'template': {'spec': {'hostAliases': [{'ip': '127.0.0.1', 'hostnames': ['ghcr.io']}]}}}}
+    command(K + ['patch', 'deployment', deployment, '-n', 'kyverno', '--type=merge', '-p', json.dumps(patch)], 'fault-patch.json')
+    command(K + ['rollout', 'status', 'deployment/' + deployment, '-n', 'kyverno', '--timeout=180s'], 'fault-rollout.json')
+    time.sleep(8)
+    trial('P3-registry-unavailable')
+    patch['spec']['template']['spec']['hostAliases'] = None
+    command(K + ['patch', 'deployment', deployment, '-n', 'kyverno', '--type=merge', '-p', json.dumps(patch)], 'recovery-patch.json')
+    command(K + ['rollout', 'status', 'deployment/' + deployment, '-n', 'kyverno', '--timeout=180s'], 'recovery-rollout.json')
+    time.sleep(8)
+    trial('P3-recovery')
+
 rows = []
 for file in OUT.glob('*/requests.jsonl'):
     rows.extend(json.loads(line) for line in file.read_text().splitlines())
@@ -99,5 +117,15 @@ for mode in ('P1', 'P2', 'P3'):
     assert all(x == 'deny_needs_reason_review' for x in summary[mode]['unsigned']), f'{mode}: unsigned not rejected'
 assert all(x == 'allow' for x in summary['P2']['authentic-disallowed-ref'])
 assert all(x == 'deny_needs_reason_review' for x in summary['P3']['authentic-disallowed-ref'])
+if os.environ.get('OTHER_RUN'):
+    assert all(x == 'allow' for x in summary['P1']['other-workflow'])
+    assert all(x == 'deny_needs_reason_review' for x in summary['P2']['other-workflow'])
+for name in ('artifact-substitution', 'tampered-statement'):
+    if name in summary['P1']:
+        for mode in ('P1', 'P2', 'P3'):
+            assert all(x == 'deny_needs_reason_review' for x in summary[mode][name])
+if os.environ.get('FAULTS') == 'true':
+    assert all(x != 'allow' for x in summary['P3-registry-unavailable']['legitimate-main'])
+    assert all(x == 'allow' for x in summary['P3-recovery']['legitimate-main'])
 if proxy:
     proxy.terminate()
