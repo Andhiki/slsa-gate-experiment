@@ -1,6 +1,7 @@
 """Exploratory actual CREATE benchmark over local kubectl proxy, no process per request."""
 import json
 import pathlib
+import re
 import statistics
 import subprocess
 import time
@@ -11,6 +12,7 @@ import uuid
 K = ['kubectl', '--kubeconfig', '/tmp/slsa-kubeconfig', '--context', 'kind-slsa-gate']
 ROOT = pathlib.Path(__file__).resolve().parent
 BASE = 'http://127.0.0.1:18001'
+CGROUP = None
 
 
 def api(method, path, value=None):
@@ -25,6 +27,32 @@ def api(method, path, value=None):
 
 
 def stats():
+    global CGROUP
+    # Read the actual controller cgroup; kubelet summary counters can stay unchanged
+    # throughout short pilot blocks and cannot resolve per-block CPU consumption.
+    if CGROUP is None:
+        pods = subprocess.run(K + ['get', 'pods', '-n', 'kyverno', '-l', 'app.kubernetes.io/component=admission-controller', '-o', 'json'],
+                              capture_output=True, text=True)
+        items = json.loads(pods.stdout).get('items', []) if pods.returncode == 0 else []
+        if items:
+            container = items[0]['status']['containerStatuses'][0]['containerID'].split('://')[1]
+            assert re.fullmatch('[a-f0-9]{64}', container)
+            found = subprocess.run(['docker', 'exec', 'slsa-gate-control-plane', 'find', '/sys/fs/cgroup',
+                                    '-type', 'd', '-name', '*' + container + '*'], capture_output=True, text=True, check=True)
+            candidates = found.stdout.splitlines()
+            if candidates:
+                CGROUP = candidates[0]
+                assert re.fullmatch(r'/sys/fs/cgroup/[A-Za-z0-9/_\.\-]+', CGROUP)
+    if CGROUP:
+        sampled = subprocess.run(['docker', 'exec', 'slsa-gate-control-plane', 'sh', '-c',
+                                  f'cat {CGROUP}/cpu.stat; echo __CURRENT__; cat {CGROUP}/memory.current; echo __PEAK__; cat {CGROUP}/memory.peak'],
+                                 capture_output=True, text=True, check=True)
+        cpu_text, memory = sampled.stdout.split('__CURRENT__')
+        current, peak = memory.split('__PEAK__')
+        counters = dict(line.split() for line in cpu_text.splitlines() if line.strip())
+        return {'status': 200, 'source': 'direct-controller-cgroup-v2', 'cgroup': CGROUP,
+                'monotonic_ns': time.monotonic_ns(), 'cpu_usage_usec': int(counters['usage_usec']),
+                'memory_current_bytes': int(current.strip()), 'memory_lifetime_peak_bytes': int(peak.strip())}
     code, body = api('GET', '/api/v1/nodes/slsa-gate-control-plane/proxy/stats/summary')
     if code != 200:
         return {'status': code, 'body': body}
