@@ -5,7 +5,7 @@ on:
       fixture:
         description: Synthetic fixture marker
         type: choice
-        options: [legitimate, alternative, unsigned]
+        options: [legitimate, alternative, unsigned, substitution, tampered]
         default: legitimate
 permissions:
   contents: read
@@ -38,7 +38,7 @@ jobs:
           tags: ${{ steps.image.outputs.name }}:${{ inputs.fixture }}-${{ github.run_id }}
           build-args: FIXTURE=${{ inputs.fixture }}
       - name: Generate GitHub SLSA attestation
-        if: inputs.fixture != 'unsigned'
+        if: inputs.fixture != 'unsigned' && inputs.fixture != 'substitution' && inputs.fixture != 'tampered'
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-name: ${{ steps.image.outputs.name }}

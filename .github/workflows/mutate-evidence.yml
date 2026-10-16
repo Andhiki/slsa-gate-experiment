@@ -1,0 +1,51 @@
+name: Publish synthetic invalid attestation fixture
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Successfully attested source build
+        default: '38845584872'
+        required: true
+      target_run:
+        description: Unsigned substitution or tampered fixture build
+        required: true
+      kind:
+        type: choice
+        options: [substitution, tampered]
+        required: true
+permissions:
+  contents: read
+  packages: write
+  actions: read
+  attestations: read
+jobs:
+  mutate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install checksum-verified ORAS
+        run: |
+          curl -fLsS https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz -o /tmp/oras_1.3.4_linux_amd64.tar.gz
+          curl -fLsS https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_checksums.txt -o /tmp/oras_checksums.txt
+          cd /tmp
+          grep ' oras_1.3.4_linux_amd64.tar.gz$' oras_checksums.txt | sha256sum --check
+          tar -xzf oras_1.3.4_linux_amd64.tar.gz oras
+      - name: Attach deliberately invalid evidence to a synthetic image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          TARGET_RUN: ${{ inputs.target_run }}
+          MUTATION: ${{ inputs.kind }}
+        run: python3 mutate_evidence.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: synthetic-mutation-evidence
+          path: mutation-results/
+          retention-days: 30
