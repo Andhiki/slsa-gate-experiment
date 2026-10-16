@@ -106,6 +106,8 @@ if os.environ.get('FAULTS') == 'true':
 
 rows = []
 for file in OUT.glob('*/requests.jsonl'):
+    if file.parent.name.startswith('http-'):
+        continue
     rows.extend(json.loads(line) for line in file.read_text().splitlines())
 summary = {}
 for row in rows:
