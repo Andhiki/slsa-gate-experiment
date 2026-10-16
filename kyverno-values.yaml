@@ -1,0 +1,19 @@
+# Compatibility pilot, pinned chart 3.9.1 / engine 1.19.1.
+# Deliberately omit unrelated controllers to limit RAM and image downloads.
+admissionController:
+  replicas: 1
+backgroundController:
+  enabled: false
+cleanupController:
+  enabled: false
+reportsController:
+  enabled: false
+features:
+  admissionReports:
+    enabled: false
+  aggregateReports:
+    enabled: false
+  policyReports:
+    enabled: false
+  generateValidatingAdmissionPolicy:
+    enabled: false

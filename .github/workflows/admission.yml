@@ -1,0 +1,65 @@
+name: Hosted admission compatibility pilot
+on:
+  workflow_dispatch:
+    inputs:
+      main_run:
+        description: Successful main build run ID
+        required: true
+        default: '38845584872'
+      alternate_run:
+        description: Successful disallowed-ref build run ID
+        required: true
+        default: '38845624575'
+      unsigned_run:
+        description: Unsigned build run ID
+        required: true
+        default: '38845618247'
+permissions:
+  contents: read
+  packages: read
+  actions: read
+  attestations: read
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Record environment and install Kind
+        shell: bash
+        run: |
+          mkdir -p results
+          { uname -a; df -h /; docker version; kubectl version --client; helm version; } > results/environment.txt 2>&1
+          curl -fLsS https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          curl -fLsS https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
+          echo "$(cut -d ' ' -f 1 /tmp/kind.sha256sum)  /tmp/kind" | sha256sum --check
+          chmod +x /tmp/kind
+          /tmp/kind create cluster --name slsa-gate --image kindest/node:v1.34.0 --kubeconfig /tmp/slsa-kubeconfig --wait 120s
+          kubectl --kubeconfig /tmp/slsa-kubeconfig create namespace slsa-experiment
+      - name: Log in to registry for independent verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run actual admission pilot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIN_RUN: ${{ inputs.main_run }}
+          ALT_RUN: ${{ inputs.alternate_run }}
+          UNSIGNED_RUN: ${{ inputs.unsigned_run }}
+        run: python3 hosted_trial.py
+      - name: Collect cluster diagnostics
+        if: always()
+        run: |
+          kubectl --kubeconfig /tmp/slsa-kubeconfig get pods -A -o wide > results/pods.txt 2>&1 || true
+          kubectl --kubeconfig /tmp/slsa-kubeconfig get events -A > results/events.txt 2>&1 || true
+          kubectl --kubeconfig /tmp/slsa-kubeconfig logs -n kyverno -l app.kubernetes.io/component=admission-controller --all-containers --tail=1000 > results/controller.log 2>&1 || true
+          docker stats --no-stream > results/docker-stats.txt 2>&1 || true
+      - name: Preserve pilot evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admission-pilot-evidence
+          path: results/
+          retention-days: 30
