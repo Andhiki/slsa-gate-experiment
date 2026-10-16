@@ -1,0 +1,22 @@
+{
+  "repository": "Andhiki/slsa-gate-experiment",
+  "image_repository": "ghcr.io/andhiki/slsa-gate-experiment",
+  "main": {
+    "digest": "sha256:4f7c122798111cc5a4663aaa7a4a264420222be52a1ebdbe053744eccdb14219",
+    "build_run": "38845584872",
+    "attempt": 2,
+    "oracle": "authorized"
+  },
+  "fresh_authorized": {
+    "digest": "sha256:078bd251f5602986e18299efb416a65a0c31f1e135e47e9d43824fec7400b41b",
+    "build_run": "38852933465",
+    "attempt": 1,
+    "oracle": "authorized",
+    "independent_verification": "gh attestation verify with --bundle-from-oci --source-ref refs/heads/main succeeded before cache scout"
+  },
+  "unsigned": {
+    "digest": "sha256:46a46d77d43f4e95df2312b6b6cf803717cba0e7b9476777fd29e2df0c023494",
+    "build_run": "38845618247",
+    "oracle": "unauthorized"
+  }
+}

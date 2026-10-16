@@ -1,0 +1,13 @@
+# Same engine and controller footprint as the compatibility pilot.
+# Shortened TTL is an experimental treatment, not the 60 minute default.
+admissionController:
+  container:
+    extraArgs:
+      imageVerifyCacheTTLDuration: 30s
+    extraEnvVars:
+      - name: HTTPS_PROXY
+        value: http://fault-proxy.kyverno.svc:3128
+      - name: HTTP_PROXY
+        value: http://fault-proxy.kyverno.svc:3128
+      - name: NO_PROXY
+        value: .svc,.cluster.local,127.0.0.1,localhost,10.96.0.0/12,10.244.0.0/16

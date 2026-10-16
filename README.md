@@ -13,5 +13,17 @@ The experiment tests artifact authorization and provenance verification. A valid
 - `mutate-evidence.yml` attaches copied or deliberately modified public evidence to synthetic targets and checks independent verification rejects them.
 - `admission.yml` creates ephemeral Kind/Kyverno on the hosted runner, exercises actual CREATE requests, and uploads raw evidence for 30 days. No local Docker cluster is needed.
 - Optional performance probes use sequential repeated-digest requests. Optional fault injection restarts the controller and redirects GHCR to loopback; it models a cold-controller registry outage, not all network failures or warm-cache offline verification.
+- `cache.yml` separately tests warm-controller GHCR outages, cache disabled,
+  a 30 second experimental TTL, metadata-only policy edits, tightening, and
+  recovery. A CONNECT proxy terminates GHCR tunnels without restarting the
+  controller; TLS remains end-to-end. Client/server Kubernetes versions match.
+  See the [predeclared protocol](CACHE_PROTOCOL_V1.md). One session is a
+  compatibility scout; three fresh-cluster sessions are a small replicated
+  study, not an industry-wide effectiveness estimate.
+
+Run local checks with `python check_fault_proxy.py`, `python check_policies.py`,
+`python check_cache_analyze.py`, and `python -c "import cache_trial; cache_trial.self_check()"`.
+Analyze explicitly selected downloaded session directories with
+`python cache_analyze.py <directory> --output <analysis.json>`.
 
 These are exploratory compatibility scripts. Pin the preinstalled kubectl to a version compatible with the node image, record full runner hardware, and freeze a larger randomized protocol before treating measurements as confirmatory research. CPU block counters include controller background and DELETE cleanup. Verification signature and transparency checks must remain enabled.

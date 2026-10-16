@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fault-proxy
+  namespace: kyverno
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: fault-proxy}
+  template:
+    metadata:
+      labels: {app: fault-proxy}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: proxy
+          image: python@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+          command: [python, /app/fault_proxy.py]
+          ports: [{containerPort: 3128}]
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: '1', memory: 128Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: source, mountPath: /app, readOnly: true}]
+      volumes:
+        - name: source
+          configMap: {name: fault-proxy-source}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fault-proxy
+  namespace: kyverno
+spec:
+  selector: {app: fault-proxy}
+  ports: [{port: 3128, targetPort: 3128}]
