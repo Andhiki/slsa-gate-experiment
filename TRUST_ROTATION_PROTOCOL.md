@@ -1,5 +1,11 @@
 # Trust-key rotation feasibility scout
 
+Setup repair after failed run 38872383632: concatenated public keys in one
+attestor field did not accept both fixtures on this path. Use two explicit
+attestor entries with count=1, sourced from oldSlot/retainedSlot ConfigMap fields.
+Rotation sets both slots to the retained public key; the policy spec stays fixed.
+The failed run stopped before rotation and is excluded from outcome comparisons.
+
 Declared before execution, 16 October 2026. This is a known-behavior replication
 and measurement feasibility check, not a novel-cache or vulnerability claim.
 

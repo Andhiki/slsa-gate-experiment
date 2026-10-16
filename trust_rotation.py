@@ -22,9 +22,9 @@ def policy(use_cache, nonce):
     rule['verifyImages'] = [{
         'imageReferences': ['*'], 'type': 'Cosign', 'required': True,
         'mutateDigest': True, 'verifyDigest': True, 'useCache': use_cache,
-        'attestations': [{'predicateType': TYPE, 'attestors': [{'entries': [{'keys': {
-            'publicKeys': '{{ trust.data.publicKeys }}',
-            'rekor': {'ignoreTlog': True}}}]}],
+        'attestations': [{'predicateType': TYPE, 'attestors': [{'count': 1, 'entries': [
+            {'keys': {'publicKeys': '{{ trust.data.' + slot + ' }}',
+                      'rekor': {'ignoreTlog': True}}} for slot in ('oldSlot', 'retainedSlot')]}],
             'conditions': [{'all': [{'key': '{{ buildDefinition.buildType }}',
                 'operator': 'Equals', 'value': 'https://example.invalid/rotation-fixture/v1'}]}]}]}]
     return p
@@ -41,10 +41,10 @@ def self_check():
     return {'ok': True, 'policy_generation': True, 'classifier_controls': True}
 
 
-def set_trust(text, phase):
+def set_trust(old_key, retained_key, phase):
     obj = {'apiVersion': 'v1', 'kind': 'ConfigMap',
            'metadata': {'name': 'rotation-trust', 'namespace': 'slsa-experiment'},
-           'data': {'publicKeys': text}}
+           'data': {'oldSlot': old_key, 'retainedSlot': retained_key}}
     code, existing, _ = c.api_json('GET', CM)
     if code == 200:
         obj['metadata']['resourceVersion'] = existing['metadata']['resourceVersion']
@@ -53,7 +53,7 @@ def set_trust(text, phase):
                             CM if code == 200 else CM.rsplit('/', 1)[0], obj)
     result = {'phase': phase, 'started_at': start, 'completed_at': c.utc_now(),
               'http_status': code, 'object': c.parse_json(raw), 'raw': raw,
-              'public_keys_sha256': hashlib.sha256(text.encode()).hexdigest()}
+              'public_keys_sha256': hashlib.sha256(json.dumps(obj['data'], sort_keys=True).encode()).hexdigest()}
     c.append_jsonl(c.OUT / 'rotation-trust-updates.jsonl', result)
     if code not in (200, 201):
         raise RuntimeError('ConfigMap trust update failed: ' + raw)
@@ -81,7 +81,7 @@ def main():
                 cell = mode + '-' + network
                 ctx = {'run_id': run_id, 'config': cell, 'seed': os.environ.get('SEED', 'scout')}
                 c.record_control(run_id, cell, 'prepare', 'normal')
-                initial = set_trust(old.strip() + '\n' + retained.strip() + '\n', cell + '-initial')
+                initial = set_trust(old, retained, cell + '-initial')
                 c.apply_policy(policy(mode != 'no-cache', run_id + '-' + cell),
                                run_id, cell, 'prepare', wait_seconds=8)
                 before = m.full_policy_snapshot('before-seed')
@@ -89,7 +89,7 @@ def main():
                 seeds = [c.run_case(ctx, case, 'seed')[0] for case in cases]
                 if any(row['http_status'] != 201 for row in seeds):
                     raise RuntimeError('setup: both keys must seed successfully: ' + cell)
-                rotation = set_trust(retained, cell + '-rotate')
+                rotation = set_trust(retained, retained, cell + '-rotate')
                 c.record_control(run_id, cell, 'network', network)
                 time.sleep(3)
                 patch = None
