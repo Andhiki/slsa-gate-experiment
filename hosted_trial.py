@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import harness
 from make_policies import policies
+import http_probe
 
 ROOT = pathlib.Path(__file__).resolve().parent
 OUT = ROOT / 'results'
@@ -59,13 +60,21 @@ for case in cases:
                  '--bundle-from-oci', '--source-ref', 'refs/heads/main', '--format', 'json'],
                 case['id'] + '-main-ref.json', check=False)
 
+proxy = http_probe.start_proxy() if os.environ.get('PERFORMANCE') == 'true' else None
+
+def measure(mode):
+    if proxy:
+        http_probe.benchmark(mode, cases[0]['image'])
+
 trial('B0')
+measure('B0')
 command(['helm', 'repo', 'add', 'kyverno', 'https://kyverno.github.io/kyverno/'], 'helm-repo.json')
 command(['helm', 'upgrade', '--install', 'kyverno', 'kyverno/kyverno', '--version', '3.9.1',
          '--namespace', 'kyverno', '--create-namespace', '--kubeconfig', KUBE,
          '--kube-context', 'kind-slsa-gate', '--values', 'kyverno-values.yaml', '--wait', '--timeout', '180s'],
         'helm-install.json')
 trial('B1')
+measure('B1')
 
 for mode, policy in policies(REPO).items():
     path = OUT / (mode + '-policy.json')
@@ -75,6 +84,7 @@ for mode, policy in policies(REPO).items():
     time.sleep(8)
     command(K + ['get', 'clusterpolicy', 'slsa-experiment', '-o', 'json'], mode + '-status.json')
     trial(mode, path)
+    measure(mode)
 
 rows = []
 for file in OUT.glob('*/requests.jsonl'):
@@ -89,3 +99,5 @@ for mode in ('P1', 'P2', 'P3'):
     assert all(x == 'deny_needs_reason_review' for x in summary[mode]['unsigned']), f'{mode}: unsigned not rejected'
 assert all(x == 'allow' for x in summary['P2']['authentic-disallowed-ref'])
 assert all(x == 'deny_needs_reason_review' for x in summary['P3']['authentic-disallowed-ref'])
+if proxy:
+    proxy.terminate()

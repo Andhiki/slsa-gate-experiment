@@ -14,6 +14,10 @@ on:
         description: Unsigned build run ID
         required: true
         default: '38845618247'
+      performance:
+        description: Include exploratory direct-HTTP and controller resource measurements
+        type: boolean
+        default: false
 permissions:
   contents: read
   packages: read
@@ -48,6 +52,7 @@ jobs:
           MAIN_RUN: ${{ inputs.main_run }}
           ALT_RUN: ${{ inputs.alternate_run }}
           UNSIGNED_RUN: ${{ inputs.unsigned_run }}
+          PERFORMANCE: ${{ inputs.performance }}
         run: python3 hosted_trial.py
       - name: Collect cluster diagnostics
         if: always()
