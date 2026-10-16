@@ -1,0 +1,110 @@
+name: Trust rotation feasibility scout
+on:
+  workflow_dispatch:
+    inputs:
+      sessions:
+        description: Independent fresh-cluster sessions (1 or 3)
+        default: '1'
+permissions:
+  contents: read
+  packages: write
+jobs:
+  cache:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ${{ fromJSON(inputs.sessions == '3' && '[20261031,20261032,20261033]' || '[20261031]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Instrument checks and record host
+        run: |
+          mkdir -p results
+          python3 check_fault_proxy.py
+          python3 check_policies.py
+          python3 check_cache_analyze.py
+          python3 -c 'import trust_rotation; print(trust_rotation.self_check())'
+          { date -u; uname -a; lscpu; free -b; df -h /; python3 --version; gh --version; docker version; helm version; echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"; } > results/environment.txt 2>&1
+          git rev-parse HEAD > results/source-commit.txt
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish disposable keyed synthetic attestations
+        env:
+          COSIGN_PASSWORD: synthetic-disposable-experiment-only
+          SEED: ${{ matrix.seed }}
+        run: |
+          curl -fLsS https://github.com/sigstore/cosign/releases/download/v2.6.1/cosign-linux-amd64 -o /tmp/cosign
+          echo '064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a  /tmp/cosign' | sha256sum --check
+          chmod +x /tmp/cosign
+          /tmp/cosign version > results/cosign-version.txt
+          mkdir -p /tmp/rotation-keys
+          echo '{"buildDefinition":{"buildType":"https://example.invalid/rotation-fixture/v1","externalParameters":{"synthetic":true},"internalParameters":{},"resolvedDependencies":[]},"runDetails":{"builder":{"id":"https://example.invalid/synthetic-not-trusted-builder"},"metadata":{"invocationId":"rotation-scout"}}}' > /tmp/rotation-predicate.json
+          for kind in old retained; do
+            /tmp/cosign generate-key-pair --output-key-prefix /tmp/rotation-keys/$kind
+            image=ghcr.io/${GITHUB_REPOSITORY,,}:rotation-${GITHUB_RUN_ID}-${SEED}-${kind}
+            docker build --build-arg FIXTURE=rotation-${GITHUB_RUN_ID}-${SEED}-${kind} -t "$image" .
+            docker push "$image"
+            digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$image")
+            printf '%s=%s\n' "$kind" "$digest" >> results/rotation-images.txt
+            /tmp/cosign attest --yes --tlog-upload=false --key /tmp/rotation-keys/$kind.key --type https://slsa.dev/provenance/v1 --predicate /tmp/rotation-predicate.json "$digest" > /tmp/rotation-$kind-attest.txt
+          done
+          python3 - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('results')
+          images=dict(line.split('=',1) for line in (p/'rotation-images.txt').read_text().splitlines())
+          (p/'rotation-fixtures.json').write_text(json.dumps(images,indent=2))
+          PY
+          cp /tmp/rotation-keys/*.pub results/
+          for kind in old retained; do
+            image=$(sed -n "s/^${kind}=//p" results/rotation-images.txt)
+            set +e
+            /tmp/cosign verify-attestation --key /tmp/rotation-keys/retained.pub --insecure-ignore-tlog --type https://slsa.dev/provenance/v1 "$image" > results/oracle-$kind.jsonl 2> results/oracle-$kind.stderr
+            code=$?
+            set -e
+            echo "$code" > results/oracle-$kind.exit
+            if [ "$kind" = retained ]; then test "$code" = 0; else test "$code" != 0; fi
+          done
+      - name: Install pinned clients and fresh cluster
+        run: |
+          curl -fLsS https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl -o /tmp/kubectl
+          curl -fLsS https://dl.k8s.io/release/v1.34.0/bin/linux/amd64/kubectl.sha256 -o /tmp/kubectl.sha256
+          echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum --check
+          chmod +x /tmp/kubectl
+          sudo install /tmp/kubectl /usr/local/bin/kubectl
+          curl -fLsS https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          curl -fLsS https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256sum
+          echo "$(cut -d ' ' -f 1 /tmp/kind.sha256sum)  /tmp/kind" | sha256sum --check
+          chmod +x /tmp/kind
+          /tmp/kind create cluster --name slsa-gate --image kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a --kubeconfig /tmp/slsa-kubeconfig --wait 120s
+          kubectl --kubeconfig /tmp/slsa-kubeconfig create namespace slsa-experiment
+          kubectl --kubeconfig /tmp/slsa-kubeconfig create namespace kyverno
+          kubectl --kubeconfig /tmp/slsa-kubeconfig create configmap fault-proxy-source -n kyverno --from-file=fault_proxy.py
+          kubectl --kubeconfig /tmp/slsa-kubeconfig apply -f fault-proxy.yaml
+          kubectl --kubeconfig /tmp/slsa-kubeconfig rollout status deploy/fault-proxy -n kyverno --timeout=120s
+          helm repo add kyverno https://kyverno.github.io/kyverno/
+          helm upgrade --install kyverno kyverno/kyverno --version 3.9.1 --namespace kyverno --kubeconfig /tmp/slsa-kubeconfig --values kyverno-values.yaml --values cache-values.yaml --values metadata-proof-values.yaml --wait --timeout 180s
+          kubectl --kubeconfig /tmp/slsa-kubeconfig version -o json > results/kubernetes-version.json
+          kubectl --kubeconfig /tmp/slsa-kubeconfig get deployment kyverno-admission-controller -n kyverno -o json > results/controller-deployment.json
+      - name: Run predeclared trust rotation scout
+        env:
+          SEED: ${{ matrix.seed }}
+          CACHE_TTL_SECONDS: '120'
+          RUN_ID: trust-rotation-${{ github.run_id }}-${{ matrix.seed }}
+        run: python3 trust_rotation.py
+      - name: Preserve diagnostics
+        if: always()
+        run: |
+          kubectl --kubeconfig /tmp/slsa-kubeconfig get pods -A -o wide > results/pods.txt 2>&1 || true
+          kubectl --kubeconfig /tmp/slsa-kubeconfig get events -A > results/events.txt 2>&1 || true
+          kubectl --kubeconfig /tmp/slsa-kubeconfig logs -n kyverno -l app.kubernetes.io/component=admission-controller --all-containers --tail=1000 > results/controller.log 2>&1 || true
+          kubectl --kubeconfig /tmp/slsa-kubeconfig logs -n kyverno deployment/fault-proxy > results/fault-proxy.log 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: trust-rotation-evidence-${{ matrix.seed }}
+          path: results/
+          retention-days: 30
