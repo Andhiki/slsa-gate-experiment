@@ -55,10 +55,31 @@ def analyze(paths):
     sessions = {}
     for row in rows:
         sessions.setdefault((row['run_id'], row['seed']), set()).add(row['controller_pod_uid'])
+    paired = []
+    for run, seed in sessions:
+        treatments = {}
+        for enabled in (False, True):
+            values = [r for r in rows if r['run_id'] == run and r['seed'] == seed
+                      and r.get('cache', r['config'] if isinstance(r['config'], dict) else {}).get('useCache') == enabled
+                      and r['phase'] == 'benchmark-repeat']
+            if values:
+                treatments[str(enabled)] = {
+                    'n': len(values), 'accepted': sum(r['outcome_class'] == 'accepted' for r in values),
+                    'median_ms': statistics.median(r['latency_ms'] for r in values),
+                    'min_ms': min(r['latency_ms'] for r in values),
+                    'max_ms': max(r['latency_ms'] for r in values),
+                    'ghcr_bytes_in_delta': sum_deltas(values, 'bytes_in'),
+                    'ghcr_bytes_out_delta': sum_deltas(values, 'bytes_out')}
+        pair = {'run_id': run, 'seed': seed, 'treatments': treatments}
+        if set(treatments) == {'True', 'False'}:
+            pair['disabled_over_enabled_median_ratio'] = treatments['False']['median_ms'] / treatments['True']['median_ms']
+            pair['disabled_minus_enabled_median_ms'] = treatments['False']['median_ms'] - treatments['True']['median_ms']
+        paired.append(pair)
     return {'files': [str(p) for p in sources], 'n_requests': len(rows),
             'controller_identities': [{'run_id': run, 'seed': seed, 'uids': sorted(uids, key=str),
                                        'stable': len(uids) == 1 and None not in uids} for (run, seed), uids in sessions.items()],
             'groups': summary,
+            'benchmark_session_pairs': paired,
             'scope': 'Descriptive fresh-cluster sessions; repeated requests are not independent applications.'}
 
 

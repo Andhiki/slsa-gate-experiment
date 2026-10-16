@@ -27,7 +27,7 @@ jobs:
           python3 check_policies.py
           python3 check_cache_analyze.py
           python3 -c 'import cache_trial; cache_trial.self_check()'
-          { date -u; uname -a; lscpu; free -b; df -h /; docker version; helm version; echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"; } > results/environment.txt 2>&1
+          { date -u; uname -a; lscpu; free -b; df -h /; python3 --version; gh --version; docker version; helm version; echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"; } > results/environment.txt 2>&1
           git rev-parse HEAD > results/source-commit.txt
       - name: Install pinned clients and fresh cluster
         run: |

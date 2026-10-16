@@ -1,5 +1,37 @@
 # Cache availability experiment, protocol v1
 
+## Replication amendment v1.1 (2026-10-16, after compatibility scout)
+
+Scout run `38853823596`, source `b810376`, completed with 34 requests. Retain it
+separately; do not pool its observations with the three replication sessions.
+The deployed controller argument was explicitly
+`--imageVerifyCacheTTLDuration=30s`. A wrapped HTTP 400 for proxy failure had
+`Service Unavailable` in the verifier message; preserve it as infrastructure
+failure, distinct from the registry-on tightened-policy condition denial.
+
+Before dispatching the three sessions, make these fixed validity additions:
+
+1. Assert the actual deployed TTL argument and the authorized fixture digest
+   at runtime. After the blocked fresh-image probe, add a registry-on fresh
+   authorized control and require acceptance. Do not warm it before the outage.
+2. Add eight seconds of sham waiting under blocked registry with unchanged
+   policy, then probe again before applying the metadata-only update. Confirm
+   the later metadata probe still starts before the 30 second TTL expires.
+3. After outage/recovery, seed a new policy revision for each cache treatment,
+   accept one normal request, then measure ten sequential normal repeated
+   digest requests. Keep the seed request separate from repeats. The sample is
+   descriptive: ten repeats per configuration/session, three fresh clusters;
+   no p95 SLA or crypto-only timing claim. These extra requests occur after the
+   outage probes and before separate freshly seeded TTL/metadata phases.
+4. Print phase/status diagnostics and add a self-check for the observed wrapped
+   HTTP 400 infrastructure message. Hypothesis outcomes remain unasserted.
+5. Pin the admission engine to the manifest digest resolved by the scout:
+   `reg.kyverno.io/kyverno/kyverno@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb`.
+
+The additions strengthen controls and characterize a cost already seen in the
+scout. Hypotheses and fixtures are unchanged. Freeze one new source commit for
+all three independent sessions with the original seeds and retain all failures.
+
 Declared 2026-10-16 before the first cache workflow is dispatched. This follows
 the completed cold-controller pilot and source inspection; it is not a claim
 of a new cache mechanism or a previously undiscovered vulnerability.

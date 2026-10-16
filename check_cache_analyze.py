@@ -30,4 +30,10 @@ with tempfile.TemporaryDirectory() as folder:
         raise AssertionError('Duplicate input should be rejected')
     except AssertionError as error:
         assert 'Duplicate source' in str(error)
+    cached = dict(row, phase='benchmark-repeat', latency_ms=2)
+    uncached = dict(row, phase='benchmark-repeat', config={'useCache': False}, latency_ms=20)
+    path.write_text(json.dumps(cached) + '\n' + json.dumps(uncached) + '\n', encoding='utf-8')
+    pair = analyze([path])['benchmark_session_pairs'][0]
+    assert pair['disabled_over_enabled_median_ratio'] == 10
+    assert pair['disabled_minus_enabled_median_ms'] == 18
 print('Cache artifact aggregation self-check passed.')

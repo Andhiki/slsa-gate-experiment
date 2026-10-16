@@ -2,6 +2,8 @@
 # Shortened TTL is an experimental treatment, not the 60 minute default.
 admissionController:
   container:
+    image:
+      tag: v1.19.1@sha256:b31d8511ae5fd6010e2a01ea72ebae08eb82fa51d91af14a1d9fe989949b4edb
     extraArgs:
       imageVerifyCacheTTLDuration: 30s
     extraEnvVars:

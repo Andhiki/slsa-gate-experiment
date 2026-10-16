@@ -33,6 +33,8 @@ PROXY_STATS_URL = "http://localhost:3128/stats"
 PROXY_CONTROL_URL = "http://localhost:3128/control"
 POLICY_API = "/apis/kyverno.io/v1/clusterpolicies/" + POLICY_NAME
 CONTROLLER_SELECTOR = "app.kubernetes.io/component=admission-controller"
+CONTROLLER_DEPLOYMENT = "/apis/apps/v1/namespaces/kyverno/deployments/kyverno-admission-controller"
+CONTROLLER_DEPLOYMENT_OBSERVATION = None
 
 
 def utc_now():
@@ -142,6 +144,29 @@ def current_controller_uid():
     return chosen[0].get("metadata", {}).get("uid") if chosen else None
 
 
+def inspect_controller_cache_ttl(ttl_seconds):
+    code, deployment, raw = api_json("GET", CONTROLLER_DEPLOYMENT)
+    if code != 200 or not isinstance(deployment, dict):
+        raise RuntimeError(f"setup invalid: could not inspect Kyverno controller deployment (HTTP {code})")
+    pod_spec = deployment.get("spec", {}).get("template", {}).get("spec", {})
+    admission_containers = [c for c in pod_spec.get("containers", []) if c.get("name") == "kyverno"]
+    if len(admission_containers) != 1:
+        raise RuntimeError(f"setup invalid: expected one kyverno admission container, found {len(admission_containers)}")
+    container = admission_containers[0]
+    checked_container = {"name": container.get("name"), "command": container.get("command", []),
+                         "args": container.get("args", [])}
+    all_args = list(checked_container["command"]) + list(checked_container["args"])
+    expected = f"--imageVerifyCacheTTLDuration={ttl_seconds}s"
+    ttl_flags = [arg for arg in all_args if arg.startswith("--imageVerifyCacheTTLDuration")]
+    if ttl_flags != [expected]:
+        raise RuntimeError(f"setup invalid: kyverno container must have exactly {expected}; found {ttl_flags}")
+    return {"http_status": code, "captured_at": utc_now(), "expected_ttl_seconds": ttl_seconds,
+            "expected_arg": expected, "checked_container": checked_container,
+            "deployment_uid": deployment.get("metadata", {}).get("uid"),
+            "deployment_resourceVersion": deployment.get("metadata", {}).get("resourceVersion"),
+            "object": deployment, "raw": raw}
+
+
 def save_environment_snapshot(run_id, config_name, phase, note=None):
     started = utc_now()
     policy_code, policy, policy_body = api_json("GET", POLICY_API)
@@ -152,6 +177,8 @@ def save_environment_snapshot(run_id, config_name, phase, note=None):
         "policy": {"http_status": policy_code, "object": policy, "raw": policy_body},
         "controller_pods": {"http_status": pod_code, "object": pods},
         "controller_pod_uids": [p.get("metadata", {}).get("uid") for p in (pods or {}).get("items", [])],
+        "controller_deployment_ttl_check_file": "cache-controller-deployment-ttl.json"
+        if CONTROLLER_DEPLOYMENT_OBSERVATION else None,
         "proxy": safe_proxy_stats(), "cgroup": safe_cgroup_stats(),
     }
     append_jsonl(OUT / "cache-controller-snapshots.jsonl", snapshot)
@@ -288,6 +315,9 @@ def run_case(ctx, case, phase, anchor_ns=None, anchor_at=None, control_ns=None, 
         "case_id": case["case_id"], "event": "request_recorded", "at": utc_now(),
         "http_status": row["http_status"], "outcome_class": row["outcome_class"],
     })
+    print(json.dumps({"event": "request", "run_id": row["run_id"], "config": row["config"],
+                      "phase": phase, "case_id": case["case_id"], "http_status": row["http_status"],
+                      "outcome_class": row["outcome_class"]}), flush=True)
     return row, completed_ns
 
 
@@ -360,6 +390,21 @@ def run_config(run_id, seed, config, cases, ttl_seconds):
                      control_at=block_control["control_completed_at"])
     record_control(run_id, config_name, "outage-recovery", "normal")
     recovery = warm(ctx, main, "outage-recovery", count=1)
+    fresh_case = next((case for case in cases if case["case_id"] == "fresh-authorized"), None)
+    fresh_recovery = run_case(ctx, fresh_case, "outage-recovery-fresh-authorized")[0] if fresh_case else None
+    if fresh_recovery is not None and fresh_recovery["http_status"] != 201:
+        raise RuntimeError("setup invalid: fresh authorized digest was not accepted after restoring normal proxy mode")
+
+    # Bounded normal-mode repeat benchmark on a fresh policy revision. Keep the
+    # policy and controller fixed through all ten requests in the sample.
+    benchmark_policy = policy_for_cache(config, nonce=f"{seed}-benchmark")
+    apply_policy(benchmark_policy, run_id, config_name, "benchmark-seed-policy")
+    benchmark_seed = warm(ctx, main, "benchmark-seed", count=1)
+    if benchmark_seed["accepted"] != 1:
+        raise RuntimeError("setup invalid: normal repeat benchmark seed was not accepted")
+    benchmark_rows = [run_case(ctx, main, "benchmark-repeat")[0] for _ in range(10)]
+    if any(row["http_status"] != 201 for row in benchmark_rows):
+        raise RuntimeError("setup invalid: normal repeat benchmark contained a rejected main digest")
 
     if config:
         # A new policy resourceVersion makes this a fresh positive cache entry for TTL timing.
@@ -393,6 +438,12 @@ def run_config(run_id, seed, config, cases, ttl_seconds):
                                      anchor_at=metadata_warm["last_success_at"],
                                      control_ns=metadata_control["_control_completed_monotonic_ns"],
                                      control_at=metadata_control["control_completed_at"])
+        metadata_sham_wait_seconds = 8
+        time.sleep(metadata_sham_wait_seconds)
+        metadata_sham, _ = run_case(ctx, main, "metadata-sham-wait", anchor_ns=metadata_warm["last_success_ns"],
+                                    anchor_at=metadata_warm["last_success_at"],
+                                    control_ns=metadata_control["_control_completed_monotonic_ns"],
+                                    control_at=metadata_control["control_completed_at"])
         policy_before = api_json("GET", POLICY_API)
         metadata_policy = copy.deepcopy(metadata_seed_policy)
         metadata_policy.setdefault("metadata", {}).setdefault("annotations", {})["cache-experiment/nonce"] = f"{seed}-metadata"
@@ -409,6 +460,9 @@ def run_config(run_id, seed, config, cases, ttl_seconds):
             "after_spec_sha256": after_spec_hash, "spec_unchanged": before_spec_hash == after_spec_hash,
             "before_resourceVersion": (policy_before[1] or {}).get("metadata", {}).get("resourceVersion"),
             "after_resourceVersion": metadata_status.get("resourceVersion"),
+            "sham_wait_seconds": metadata_sham_wait_seconds,
+            "sham_wait_http_status": metadata_sham["http_status"],
+            "sham_wait_outcome_class": metadata_sham["outcome_class"],
         })
         record_control(run_id, config_name, "metadata-recovery", "normal")
         warm(ctx, main, "metadata-recovery", count=1)
@@ -438,8 +492,14 @@ def run_config(run_id, seed, config, cases, ttl_seconds):
         "config": config_name, "cache_enabled": config,
         "base_policy_uid": policy_result.get("uid"), "base_policy_resourceVersion": policy_result.get("resourceVersion"),
         "warm_initial_accepted": initial_warm["accepted"], "recovery": recovery,
+        "fresh_authorized_recovery": fresh_recovery,
+        "normal_repeat_benchmark": {"n": len(benchmark_rows),
+                                     "accepted": sum(r["http_status"] == 201 for r in benchmark_rows),
+                                     "latency_ms": [r["latency_ms"] for r in benchmark_rows]},
         "ttl_immediate": immediate if config else None, "ttl_after_expiry": expired if config else None,
-        "metadata_immediate": meta_immediate if config else None, "metadata_after_update": metadata_row if config else None,
+        "metadata_immediate": meta_immediate if config else None,
+        "metadata_sham_wait": metadata_sham if config else None,
+        "metadata_after_update": metadata_row if config else None,
         "policy_invalidation": blocked_tight, "tightened_policy_normal": normal_tight,
         "restored_policy_normal": restored,
     }
@@ -481,7 +541,7 @@ def summarize(run_id, seed, ttl_seconds, configs, cases, results):
     return summary
 
 
-def self_check():
+def self_check(fresh_digest=""):
     """Check immutable fixture wiring and the policy/outcome labels used by the run."""
     fixtures = json.loads((ROOT / "cache-fixtures.json").read_text(encoding="utf-8"))
     assert fixtures["repository"] == "Andhiki/slsa-gate-experiment"
@@ -491,7 +551,7 @@ def self_check():
     assert fixtures["unsigned"]["digest"] == UNSIGNED_DIGEST
     assert fixtures["unsigned"]["oracle"] == "unauthorized"
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", fixtures["fresh_authorized"]["digest"])
-    configured_fresh = os.environ.get("FRESH_DIGEST", "").strip()
+    configured_fresh = (fresh_digest or "").strip()
     if configured_fresh:
         configured_fresh = configured_fresh if configured_fresh.startswith("sha256:") else "sha256:" + configured_fresh
         assert configured_fresh == fixtures["fresh_authorized"]["digest"]
@@ -516,9 +576,14 @@ def self_check():
     denial = {"kind": "Status", "reason": "Forbidden",
               "message": "admission webhook denied the Pod because slsa-experiment image attestation verification failed"}
     assert outcome_class(403, denial) == "admission_denial"
+    wrapped_registry_error = {"kind": "Status", "reason": "BadRequest",
+                              "message": "admission webhook denied the Pod: image attestations verification failed; "
+                                         "failed to fetch bundles; Get https://ghcr.io/v2/: Service Unavailable"}
+    assert outcome_class(400, wrapped_registry_error) == "infrastructure_error"
     fresh_cases = case_set(fixtures["fresh_authorized"]["digest"])
     assert [case["case_id"] for case in fresh_cases] == ["main", "fresh-authorized", "unsigned"]
-    return {"ok": True, "fixture_digests_match": True, "policy_checks": True, "outcome_checks": True}
+    return {"ok": True, "fixture_digests_match": True, "policy_checks": True, "outcome_checks": True,
+            "runtime_fresh_digest": configured_fresh or None}
 
 
 def main():
@@ -528,6 +593,8 @@ def main():
     if ttl_seconds <= 0 or ttl_seconds > 240:
         raise ValueError("CACHE_TTL_SECONDS must be between 1 and 240")
     fresh_digest = os.environ.get("FRESH_DIGEST", "").strip()
+    selfcheck = self_check(fresh_digest)
+    print(json.dumps({"event": "self_check", **selfcheck}), flush=True)
     cases = case_set(fresh_digest)
     configs = [False, True]
     random.Random(seed).shuffle(configs)
@@ -550,6 +617,16 @@ def main():
         initial = set_proxy("normal")
         if initial["stats"].get("mode") != "normal":
             raise RuntimeError("setup invalid: fault proxy did not enter normal mode")
+        global CONTROLLER_DEPLOYMENT_OBSERVATION
+        deployment_check = inspect_controller_cache_ttl(ttl_seconds)
+        write_json(OUT / "cache-controller-deployment-ttl.json", deployment_check)
+        CONTROLLER_DEPLOYMENT_OBSERVATION = {key: value for key, value in deployment_check.items()
+                                             if key not in ("object", "raw")}
+        manifest_path = OUT / f"{run_id}-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["self_check"] = selfcheck
+        manifest["controller_cache_ttl_check"] = CONTROLLER_DEPLOYMENT_OBSERVATION
+        write_json(manifest_path, manifest)
         results = []
         for enabled in configs:
             results.append(run_config(run_id, seed, enabled, cases, ttl_seconds))
