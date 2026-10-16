@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -21,9 +22,10 @@ def policies(repository):
                                        "required": True, "verifyDigest": True, "mutateDigest": True,
                                        "attestations": [{"type": "https://slsa.dev/provenance/v1", "attestors": [
                                            {"entries": [{"keyless": {"issuer": "https://token.actions.githubusercontent.com",
-                                                                      "subject": "*", "rekor": {"url": "https://rekor.sigstore.dev"}}}]}]}]}]}]}}
+                                                                      "subjectRegExp": "^https://github\\.com/.+$", "rekor": {"url": "https://rekor.sigstore.dev"}}}]}]}]}]}]}}
     p2 = copy.deepcopy(p1)
-    p2["spec"]["rules"][0]["verifyImages"][0]["attestations"][0]["attestors"][0]["entries"][0]["keyless"]["subject"] = workflow + "@refs/heads/*"
+    # SigstoreBundle subjects are exact identities; use the explicit regex field.
+    p2["spec"]["rules"][0]["verifyImages"][0]["attestations"][0]["attestors"][0]["entries"][0]["keyless"]["subjectRegExp"] = "^" + re.escape(workflow) + "@refs/heads/.+$"
     p3 = copy.deepcopy(p2)
     p3["spec"]["rules"][0]["verifyImages"][0]["attestations"][0]["conditions"] = [{"all": [
         {"key": "{{ buildDefinition.buildType }}", "operator": "Equals", "value": "https://actions.github.io/buildtypes/workflow/v1"},

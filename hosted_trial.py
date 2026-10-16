@@ -84,3 +84,8 @@ for row in rows:
     summary.setdefault(row['policy'], {}).setdefault(row['case_id'], []).append(row['outcome'])
 (OUT / 'summary.json').write_text(json.dumps(summary, indent=2))
 print(json.dumps(summary, indent=2))
+for mode in ('P1', 'P2', 'P3'):
+    assert all(x == 'allow' for x in summary[mode]['legitimate-main']), f'{mode}: legitimate fixture rejected'
+    assert all(x == 'deny_needs_reason_review' for x in summary[mode]['unsigned']), f'{mode}: unsigned not rejected'
+assert all(x == 'allow' for x in summary['P2']['authentic-disallowed-ref'])
+assert all(x == 'deny_needs_reason_review' for x in summary['P3']['authentic-disallowed-ref'])
