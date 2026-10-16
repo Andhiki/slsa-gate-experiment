@@ -20,6 +20,9 @@ The experiment tests artifact authorization and provenance verification. A valid
   See the [predeclared protocol](CACHE_PROTOCOL_V1.md). One session is a
   compatibility scout; three fresh-cluster sessions are a small replicated
   study, not an industry-wide effectiveness estimate.
+- `metadata-proof.yml` strengthens the metadata control with matched-age
+  wait-only, single-annotation JSON PATCH, and same-value PATCH arms, using a
+  120 second TTL. See [its protocol](METADATA_PROOF_PROTOCOL.md).
 
 Run local checks with `python check_fault_proxy.py`, `python check_policies.py`,
 `python check_cache_analyze.py`, and `python -c "import cache_trial; cache_trial.self_check()"`.

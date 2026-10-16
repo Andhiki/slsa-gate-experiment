@@ -1,0 +1,5 @@
+# Larger margin separates matched-age metadata tests from TTL expiry.
+admissionController:
+  container:
+    extraArgs:
+      imageVerifyCacheTTLDuration: 120s
