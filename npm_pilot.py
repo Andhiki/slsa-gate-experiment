@@ -28,7 +28,7 @@ def run(args, cwd, label):
     start = time.monotonic()
     # No inherited GitHub token or unrelated npm policy configuration.
     env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN', 'SECRET', 'PASSWORD', 'NPM_CONFIG_'))}
-    env.update({'CI':'true', 'NPM_CONFIG_CACHE':'/tmp/npm-pilot-cache', 'NPM_CONFIG_USERCONFIG':'/dev/null', 'NPM_CONFIG_GLOBALCONFIG':'/dev/null'})
+    env.update({'CI':'true', 'NPM_CONFIG_CACHE':'/tmp/npm-pilot-cache', 'NPM_CONFIG_USERCONFIG':'/dev/null', 'NPM_CONFIG_GLOBALCONFIG':'/tmp/npm-pilot-empty-global.npmrc'})
     try:
         p = subprocess.run(args, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
         code, output = p.returncode, p.stdout
