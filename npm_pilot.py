@@ -1,5 +1,6 @@
 """Bounded npm integration scout. Standard library only; runs on hosted Linux."""
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 
 CASES = {
@@ -71,20 +73,38 @@ def sentinel():
                 blob = data.encode(); info = tarfile.TarInfo('package/' + name); info.size = len(blob)
                 tar.addfile(info, io.BytesIO(blob))
         packages.append(path)
+    class Registry(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self):
+            if self.path.split('?')[0] == '/pilot-sentinel':
+                versions = {}
+                for path in packages:
+                    version = path.name[:-4]
+                    versions[version] = {'name':'pilot-sentinel','version':version,'scripts':{'install':'node install.js'},'dist':{'tarball':f'http://127.0.0.1:{self.server.server_port}/' + path.name,'shasum':hashlib.sha1(path.read_bytes()).hexdigest()}}
+                data = json.dumps({'name':'pilot-sentinel','dist-tags':{'latest':'1.0.1'},'versions':versions}).encode()
+                self.send_response(200); self.send_header('Content-Type','application/json')
+            else:
+                path = next((p for p in packages if '/' + p.name == self.path), None)
+                if path is None: self.send_error(404); return
+                data = path.read_bytes(); self.send_response(200)
+            self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+    server = ThreadingHTTPServer(('127.0.0.1',0), Registry)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     rows = []
     for i, path in enumerate(packages):
         for arm in ARMS:
             work = base / (str(i) + '-' + arm); work.mkdir()
             policy = {'name':{'pilot-sentinel':True},'pinned':{'pilot-sentinel@1.0.0':True},'refreshed':{'pilot-sentinel@' + ('1.0.0' if i == 0 else '1.0.1'):True}}.get(arm,{})
-            save(work/'package.json', {'name':'sentinel-host','version':'1.0.0','private':True,'dependencies':{'pilot-sentinel':'file:' + str(path)},'allowScripts':policy})
+            save(work/'package.json', {'name':'sentinel-host','version':'1.0.0','private':True,'dependencies':{'pilot-sentinel':path.name[:-4]},'allowScripts':policy})
             flags = ['--dangerously-allow-all-scripts'] if arm == 'all' else ['--ignore-scripts'] if arm == 'none' else []
-            install = npm(['install', *flags], work, 'install')
+            install = npm(['install', '--registry=http://127.0.0.1:' + str(server.server_port), *flags], work, 'install')
             marker = work/'node_modules/pilot-sentinel/INSTALL_MARKER'
             imported = npm_import = run(['node','-e', "require('node:assert/strict').equal(require('pilot-sentinel'),42)"], work, 'functional')
             expected = arm in ('all','name','refreshed') or (arm == 'pinned' and i == 0)
             row = {'version':i,'arm':arm,'install':install,'functional':imported,'marker':marker.exists(),'expected':expected,'import_marker':(marker.parent/'IMPORT_MARKER').exists()}
             rows.append(row); save(base/'controls.json', rows)
             assert install['exit'] == 0 and npm_import['exit'] == 0 and marker.exists() == expected and row['import_marker'], row
+    server.shutdown()
     return rows
 
 def trial(case):

@@ -20,11 +20,17 @@ shared sequentially: elapsed times are diagnostic ONLY, not comparative speed.
 Timeout per command 180 seconds. No retries chosen based on favorable outcomes.
 Both version allow-all references must succeed before policy attribution.
 
-Additional local tarball sentinel is harmless: install writes a marker; import
+Additional loopback-registry tarball sentinel is harmless: install writes a marker; import
 writes a separate marker. Initial pinned approval must allow v1 and block v2;
 name approval must allow both; deny-all blocks both; allow-all allows both.
 Import marker demonstrates that install controls do not stop explicit runtime
 code execution. Any sentinel mismatch invalidates policy comparisons.
+
+Instrumentation amendment before integration cases: attempts 1/2 failed on
+duplicate npm config paths and then local-file source approval identity. Fix
+config paths and serve sentinel tarballs through an isolated loopback registry
+so controls use registry-name identities like the public package arms. Preserve
+both failed attempts; they are harness diagnostics, not package results.
 
 Report pending entries and version-pin changes as maintenance proxies, not
 human review time or malicious-package detection. No public package publishing,
