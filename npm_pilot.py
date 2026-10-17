@@ -80,11 +80,11 @@ def sentinel():
                 versions = {}
                 for path in packages:
                     version = path.name[:-4]
-                    versions[version] = {'name':'pilot-sentinel','version':version,'scripts':{'install':'node install.js'},'dist':{'tarball':f'http://127.0.0.1:{self.server.server_port}/' + path.name,'shasum':hashlib.sha1(path.read_bytes()).hexdigest()}}
+                    versions[version] = {'name':'pilot-sentinel','version':version,'scripts':{'install':'node install.js'},'dist':{'tarball':f'http://127.0.0.1:{self.server.server_port}/pilot-sentinel/-/pilot-sentinel-' + path.name,'shasum':hashlib.sha1(path.read_bytes()).hexdigest()}}
                 data = json.dumps({'name':'pilot-sentinel','dist-tags':{'latest':'1.0.1'},'versions':versions}).encode()
                 self.send_response(200); self.send_header('Content-Type','application/json')
             else:
-                path = next((p for p in packages if '/' + p.name == self.path), None)
+                path = next((p for p in packages if '/pilot-sentinel/-/pilot-sentinel-' + p.name == self.path), None)
                 if path is None: self.send_error(404); return
                 data = path.read_bytes(); self.send_response(200)
             self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)

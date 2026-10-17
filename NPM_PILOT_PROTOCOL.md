@@ -31,6 +31,9 @@ duplicate npm config paths and then local-file source approval identity. Fix
 config paths and serve sentinel tarballs through an isolated loopback registry
 so controls use registry-name identities like the public package arms. Preserve
 both failed attempts; they are harness diagnostics, not package results.
+Attempt 3 showed the sentinel's nonstandard tarball URL does not provide npm's
+trusted registry-version identity. Use the conventional name/-/name-version.tgz
+URL before evaluating pinned approvals. Do not weaken the pinned control.
 
 Report pending entries and version-pin changes as maintenance proxies, not
 human review time or malicious-package detection. No public package publishing,
